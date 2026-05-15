@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<title>Claude Code — Session</title>
+	<script src="https://sdpi-components.dev/releases/v3/sdpi-components.js"></script>
+	<style>
+		body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; }
+		.row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+		.dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+		.dot.on  { background: #38d27e; box-shadow: 0 0 6px #38d27e88; }
+		.dot.off { background: #6a7184; }
+		.dot.busy { background: #5b9dff; animation: pulse 1s infinite; }
+		.dot.error { background: #ff4040; }
+		.label { font-size: 12px; color: #c8cdd6; }
+		.label.muted { color: #8a8f99; }
+		.muted-block { font-size: 11px; color: #8a8f99; line-height: 1.45; padding: 0 4px; }
+		details summary { font-size: 11px; color: #8a8f99; cursor: pointer; padding: 4px 0; }
+		details[open] summary { color: #c8cdd6; }
+		code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #c8cdd6; }
+		@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
+	</style>
+</head>
+<body>
+	<sdpi-item label="Hooks">
+		<div class="row">
+			<span id="dot" class="dot off"></span>
+			<span id="label" class="label muted">checking…</span>
+		</div>
+	</sdpi-item>
+
+	<sdpi-item label="">
+		<sdpi-button id="toggle" disabled>Install Claude Code hooks</sdpi-button>
+	</sdpi-item>
+
+	<sdpi-item label="">
+		<div class="muted-block" id="port-info">
+			Hook events will POST to <code id="endpoint">http://127.0.0.1:13427/event</code>.
+		</div>
+	</sdpi-item>
+
+	<details open>
+		<summary>Tips</summary>
+		<div class="muted-block">
+			<p style="margin: 4px 0;">Drop several of these tiles onto your deck — each fills with the next active session in placement order. Press a tile to focus the iTerm / Terminal / VS Code window running that agent.</p>
+			<p style="margin: 4px 0;"><b>Already-running Claude sessions won't appear</b> until they fire their next hook event. To wake one up, switch to its terminal and type any character (or just press <kbd>↵</kbd> on an empty line).</p>
+		</div>
+	</details>
+
+	<script>
+		(function () {
+			const client = SDPIComponents.streamDeckClient;
+			const dot = document.getElementById("dot");
+			const label = document.getElementById("label");
+			const btn = document.getElementById("toggle");
+			const endpoint = document.getElementById("endpoint");
+
+			let installed = null; // null = unknown, true/false = known
+
+			function render(state) {
+				if (state.busy) {
+					dot.className = "dot busy";
+					label.textContent = state.busyText || "working…";
+					label.className = "label muted";
+					btn.disabled = true;
+					return;
+				}
+				if (state.error) {
+					dot.className = "dot error";
+					label.textContent = state.error;
+					label.className = "label";
+					btn.disabled = false;
+					return;
+				}
+				installed = !!state.installed;
+				dot.className = "dot " + (installed ? "on" : "off");
+				label.textContent = installed ? "Active in ~/.claude/settings.json" : "Not installed";
+				label.className = "label" + (installed ? "" : " muted");
+				btn.textContent = installed ? "Uninstall Claude Code hooks" : "Install Claude Code hooks";
+				btn.disabled = false;
+				if (state.port) {
+					endpoint.textContent = "http://127.0.0.1:" + state.port + "/event";
+				}
+			}
+
+			client.sendToPropertyInspector.subscribe((msg) => {
+				const p = msg && msg.payload;
+				if (!p || !p.event) return;
+				if (p.event === "hookStatus") render(p);
+			});
+
+			btn.addEventListener("click", () => {
+				if (installed === null) return;
+				render({ busy: true, busyText: installed ? "uninstalling…" : "installing…" });
+				client.send("sendToPlugin", { event: installed ? "uninstallHooks" : "installHooks" });
+			});
+
+			// Ask the plugin for current status as soon as the PI loads.
+			client.send("sendToPlugin", { event: "getHookStatus" });
+		})();
+	</script>
+</body>
+</html>

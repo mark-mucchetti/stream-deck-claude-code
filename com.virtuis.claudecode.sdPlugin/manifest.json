@@ -1,0 +1,41 @@
+{
+	"$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+	"Name": "Claude Code",
+	"Version": "0.7.0.0",
+	"Author": "Mark Mucchetti",
+	"UUID": "com.virtuis.claudecode",
+	"SDKVersion": 2,
+	"CodePath": "bin/plugin.js",
+	"Description": "Ambient status & focus for every active Claude Code terminal session. One button per running agent — see who is thinking, working, or waiting, and tap to jump back to that window.",
+	"Icon": "imgs/plugin/icon",
+	"Category": "Claude Code",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"URL": "https://github.com/mark-mucchetti/stream-deck-claude-code",
+	"Software": { "MinimumVersion": "6.5" },
+	"OS": [
+		{ "Platform": "mac", "MinimumVersion": "12" },
+		{ "Platform": "windows", "MinimumVersion": "10" }
+	],
+	"Nodejs": { "Version": "20", "Debug": "enabled" },
+	"Actions": [
+		{
+			"Name": "Session",
+			"UUID": "com.virtuis.claudecode.session",
+			"Icon": "imgs/actions/session/icon",
+			"Tooltip": "A live status tile for one Claude Code session. Place several of these on your deck — each fills with the next active session.",
+			"Controllers": ["Keypad"],
+			"UserTitleEnabled": false,
+			"DisableAutomaticStates": true,
+			"PropertyInspectorPath": "ui/session.html",
+			"States": [
+				{
+					"Image": "imgs/actions/session/key",
+					"TitleAlignment": "middle",
+					"FontSize": "10",
+					"FontStyle": "Bold",
+					"TitleColor": "#ffffff"
+				}
+			]
+		}
+	]
+}

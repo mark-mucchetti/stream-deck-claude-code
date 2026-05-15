@@ -1,0 +1,6 @@
+node_modules/
+com.virtuis.claudecode.sdPlugin/bin/
+com.virtuis.claudecode.sdPlugin/logs/
+*.streamDeckPlugin
+.DS_Store
+*.log

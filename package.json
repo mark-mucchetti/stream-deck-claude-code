@@ -1,0 +1,33 @@
+{
+  "name": "stream-deck-claude-code",
+  "version": "0.7.0",
+  "description": "Stream Deck plugin: ambient status & focus for every active Claude Code session.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c --watch",
+    "install-hooks": "node ./scripts/install-hooks.mjs",
+    "uninstall-hooks": "node ./scripts/install-hooks.mjs --uninstall",
+    "test": "tsx scripts/smoke.mts && tsx scripts/install-smoke.mts && tsx scripts/bridge-e2e.mts && tsx scripts/salient-smoke.mts",
+    "package": "streamdeck pack com.virtuis.claudecode.sdPlugin"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^1.1.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.1",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.1",
+    "@tsconfig/node20": "^20.1.4",
+    "@types/node": "^20.16.10",
+    "rollup": "^4.24.0",
+    "tslib": "^2.7.0",
+    "tsx": "^4.22.0",
+    "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

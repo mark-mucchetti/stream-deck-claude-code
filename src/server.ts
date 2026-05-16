@@ -96,9 +96,13 @@ function stateFor(payload: HookPayload): { state?: SessionState; tool?: string }
 			// blocked on the tool; back to working until something else fires.
 			return { state: "working", tool: payload.tool_name };
 		case "PostToolBatch":
-			// A batch of parallel tool calls just resolved. State follows
-			// normal working semantics.
-			return { state: "working" };
+			// A batch of parallel tool calls just resolved. The LLM is now
+			// generating the next decision (could be more tool calls or the
+			// final response) — that's thinking, not working. Individual
+			// PostToolUse stays at `working` because other tools in the same
+			// batch may still be running; PostToolBatch is the one event
+			// guaranteed to fire exactly once when the batch fully resolves.
+			return { state: "thinking" };
 		case "PermissionDenied":
 			// Auto-mode classifier (or possibly user) denied the tool. Claude
 			// resumes processing without it.

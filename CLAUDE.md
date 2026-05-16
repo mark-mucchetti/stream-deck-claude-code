@@ -55,7 +55,8 @@ Claude Code  ──►  ~/.claude/hooks/stream-deck-bridge.sh    (captures $(tty
 | `UserPromptSubmit`                                                      | `thinking` (amber) |
 | `PreToolUse` (normal tool)                                              | `working` (blue, + tool name) |
 | `PreToolUse` (`AskUserQuestion`, `ExitPlanMode`)                        | **`waiting`**  |
-| `PostToolUse` / `PostToolUseFailure` / `PostToolBatch`                  | `working`      |
+| `PostToolUse` / `PostToolUseFailure`                                    | `working`      |
+| `PostToolBatch`                                                         | `thinking`     |
 | `PermissionDenied`                                                      | `working`      |
 | `PermissionRequest`                                                     | **`waiting`**  |
 | `Elicitation`                                                           | **`waiting`**  |

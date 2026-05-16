@@ -173,8 +173,20 @@ function handleEvent(store: SessionStore, payload: HookPayload, logger: Logger):
 
 	if (payload.hook_event_name === "SessionEnd") {
 		// User ^C'd or otherwise quit — drop the tile back to the empty state.
-		// If they `claude --resume`, SessionStart will re-add the session.
+		// If they `claude --resume`, the first real event will re-add it.
 		store.remove(id);
+		return;
+	}
+
+	if (payload.hook_event_name === "SessionStart") {
+		// The VS Code Claude extension auto-spawns a second `claude` process
+		// (stream-json IO) that fires SessionStart and then idles forever
+		// because the user is interacting with the terminal claude instead.
+		// Creating a session record here would leak that phantom into the
+		// store + globalSettings forever. Defer record creation until a real
+		// event (UserPromptSubmit / PreToolUse / Notification / …) proves the
+		// session is actually in use. Every real event includes the same
+		// session_id, cwd, and terminal hints, so no information is lost.
 		return;
 	}
 

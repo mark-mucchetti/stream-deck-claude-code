@@ -69,30 +69,35 @@ const schedulePersist = () => {
 store.on("change", schedulePersist);
 store.on("rebalanced", schedulePersist);
 
-// Poll waiting sessions' transcripts for "User rejected tool use" entries.
-// Claude Code emits NO hook event when the user clicks Deny on a permission
-// or tool prompt — the transcript marker is our only signal. Period of 3s
-// keeps the false-red window short without thrashing disk.
-const REJECTION_POLL_MS = 3000;
-let rejectionPollInflight = false;
+// Poll session transcripts for state Claude Code doesn't surface via hooks:
+//   - `User rejected tool use` (no hook fires when the user clicks Deny on a
+//     permission or tool prompt — the transcript marker is the only signal).
+//   - `custom-title` changes (when the user runs `/rename foo`, the renamed
+//     session may not fire another hook event for a long time — especially
+//     if it's already `done` — so we need to pick it up here too).
+// 3s period keeps the false-red window short without thrashing disk.
+const TRANSCRIPT_POLL_MS = 3000;
+let transcriptPollInflight = false;
 setInterval(async () => {
-	if (rejectionPollInflight) return;
-	rejectionPollInflight = true;
+	if (transcriptPollInflight) return;
+	transcriptPollInflight = true;
 	try {
 		for (const s of store.list()) {
-			if (s.state !== "waiting") continue;
 			if (!s.transcriptPath) continue;
 			const meta = await readTranscriptMeta(s.transcriptPath);
-			if (meta.lastRejectionAt && meta.lastRejectionAt > s.lastUpdate) {
+			if (s.state === "waiting" && meta.lastRejectionAt && meta.lastRejectionAt > s.lastUpdate) {
 				streamDeck.logger.info(`detected user rejection in transcript for ${s.id.slice(0, 8)}`);
 				store.apply(s.id, { state: "done", lastEvent: "user_rejected" });
 			}
+			if (meta.aiTitle && meta.aiTitle !== s.aiTitle) {
+				store.apply(s.id, { aiTitle: meta.aiTitle });
+			}
 		}
 	} catch (err) {
-		streamDeck.logger.warn("rejection poll error", err);
+		streamDeck.logger.warn("transcript poll error", err);
 	} finally {
-		rejectionPollInflight = false;
+		transcriptPollInflight = false;
 	}
-}, REJECTION_POLL_MS);
+}, TRANSCRIPT_POLL_MS);
 
 streamDeck.logger.info(`Claude Code session bridge ready on port ${port}`);

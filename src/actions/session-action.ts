@@ -168,7 +168,11 @@ export class SessionAction extends SingletonAction<Settings> {
 		if (!this.store) return;
 		const hooksOk = await isInstalled();
 		const slots = this.orderedSlots();
-		const sessions = this.store.list();
+		// Match visible sessions to physical tile count *before* picking which
+		// sessions go on which slot. Without this, low-priority idle sessions
+		// can occupy the visible slots while active ones overflow off-deck.
+		this.store.reconcileCapacity(slots.length);
+		const sessions = this.store.visible();
 		await Promise.all(
 			slots.map(async (slot, i) => {
 				const s = sessions[i];

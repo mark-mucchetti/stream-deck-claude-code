@@ -13,9 +13,13 @@ type TranscriptMeta = {
 };
 
 /** Read the tail of a Claude Code transcript JSONL and pluck out the latest
- *  `ai-title` and `last-prompt` entries. The file format is one JSON object
- *  per line, written append-only. We only read the last ~32KB to keep this
- *  cheap on every hook event. */
+ *  title, last-prompt, and user-rejection entries. The file format is one
+ *  JSON object per line, written append-only. We only read the last ~32KB to
+ *  keep this cheap on every hook event.
+ *
+ *  Title precedence: a user-set `custom-title` (from `/rename foo`) wins over
+ *  an AI-generated `ai-title`. Both flow through the same `aiTitle` field so
+ *  the renderer doesn't need to know the source. */
 export async function readTranscriptMeta(path: string): Promise<TranscriptMeta> {
 	if (!path) return {};
 	try {
@@ -27,15 +31,19 @@ export async function readTranscriptMeta(path: string): Promise<TranscriptMeta> 
 			await fh.read(buf, 0, buf.length, start);
 			const text = buf.toString("utf8");
 			const lines = text.split("\n");
+			let customTitle: string | undefined;
 			let aiTitle: string | undefined;
 			let lastPrompt: string | undefined;
 			let lastRejectionAt: number | undefined;
 			for (let i = lines.length - 1; i >= 0; i--) {
-				if (aiTitle && lastPrompt && lastRejectionAt) break;
+				if (customTitle && aiTitle && lastPrompt && lastRejectionAt) break;
 				const line = lines[i].trim();
 				if (!line) continue;
 				try {
 					const o = JSON.parse(line) as Record<string, unknown>;
+					if (!customTitle && o.type === "custom-title" && typeof o.customTitle === "string") {
+						customTitle = o.customTitle;
+					}
 					if (!aiTitle && o.type === "ai-title" && typeof o.aiTitle === "string") {
 						aiTitle = o.aiTitle;
 					}
@@ -55,7 +63,7 @@ export async function readTranscriptMeta(path: string): Promise<TranscriptMeta> 
 					// partial line at the start of our tail buffer; ignore.
 				}
 			}
-			return { aiTitle, lastPrompt, lastRejectionAt };
+			return { aiTitle: customTitle ?? aiTitle, lastPrompt, lastRejectionAt };
 		} finally {
 			await fh.close();
 		}

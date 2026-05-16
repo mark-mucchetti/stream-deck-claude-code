@@ -49,6 +49,35 @@ export type Session = {
  *  with the same constant in `server.ts`. */
 const WAITS_ON_USER_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 
+/** Priority for occupying a tile when slots are scarce. Higher = keeps the
+ *  tile. `waiting` is most urgent (blocked on the human); `idle`/`done` are
+ *  the first to get pushed off. */
+function priorityScore(state: SessionState): number {
+	switch (state) {
+		case "waiting": return 5;
+		case "working": return 4;
+		case "thinking": return 3;
+		case "error": return 2;
+		case "done": return 1;
+		case "idle": return 0;
+		default: return 0;
+	}
+}
+
+/** Negative if `a` should be demoted before `b`. */
+function compareForDemotion(a: Session, b: Session): number {
+	const da = priorityScore(a.state) - priorityScore(b.state);
+	if (da !== 0) return da;
+	return a.lastUpdate - b.lastUpdate;
+}
+
+/** Negative if `a` should be promoted before `b`. */
+function compareForPromotion(a: Session, b: Session): number {
+	const db = priorityScore(b.state) - priorityScore(a.state);
+	if (db !== 0) return db;
+	return b.lastUpdate - a.lastUpdate;
+}
+
 function deriveLabel(cwd: string): string {
 	// Hand the full basename to the renderer; it owns the wrap/fit logic.
 	return basename(cwd || "") || "claude";
@@ -64,9 +93,12 @@ export class SessionStore extends EventEmitter {
 			.filter((s): s is Session => !!s);
 	}
 
-	/** Sessions assigned to tiles (overflow flag false), in arrival order. */
+	/** Sessions assigned to tiles (overflow flag false), in arrival order.
+	 *  Belt-and-braces: filters out any session whose only event is
+	 *  `SessionStart`. The server doesn't admit those anymore, but hydrate
+	 *  could resurrect one from a pre-fix globalSettings snapshot. */
 	visible(): Session[] {
-		return this.list().filter((s) => !s.overflow);
+		return this.list().filter((s) => !s.overflow && s.lastEvent !== "SessionStart");
 	}
 
 	/** Sessions bumped out by the overflow rule, in arrival order. */
@@ -78,28 +110,36 @@ export class SessionStore extends EventEmitter {
 		return this.sessions.get(id);
 	}
 
-	/** Demote longest-idle visible sessions until `visible <= capacity`, then
-	 *  promote earliest-arrival overflow sessions until `visible == capacity`.
+	/** Demote lowest-priority visible sessions until `visible <= capacity`, then
+	 *  promote highest-priority overflow sessions until `visible == capacity`.
+	 *  Priority by state: waiting > working > thinking > error > done > idle.
+	 *  Within a priority band, oldest `lastUpdate` is demoted first; newest
+	 *  `lastUpdate` is promoted first. This ensures an active session always
+	 *  pushes an idle/done one off the deck when tiles are scarce.
 	 *  Emits "rebalanced" (not "change") so callers can persist without
 	 *  triggering another render. Returns true if anything actually moved. */
 	reconcileCapacity(capacity: number): boolean {
 		let changed = false;
-		// Demote excess.
+		// Demote excess: lowest priority first, ties broken by oldest lastUpdate.
 		while (this.visible().length > capacity) {
 			const visible = this.visible();
-			let oldest = visible[0];
-			if (!oldest) break;
+			let worst = visible[0];
+			if (!worst) break;
 			for (const s of visible) {
-				if (s.lastUpdate < oldest.lastUpdate) oldest = s;
+				if (compareForDemotion(s, worst) < 0) worst = s;
 			}
-			oldest.overflow = true;
+			worst.overflow = true;
 			changed = true;
 		}
-		// Promote up to capacity from overflow, in arrival order.
+		// Promote up to capacity: highest priority first, ties broken by newest lastUpdate.
 		while (this.visible().length < capacity) {
-			const next = this.overflowList()[0];
-			if (!next) break;
-			next.overflow = false;
+			const overflow = this.overflowList();
+			if (overflow.length === 0) break;
+			let best = overflow[0];
+			for (const s of overflow) {
+				if (compareForPromotion(s, best) < 0) best = s;
+			}
+			best.overflow = false;
 			changed = true;
 		}
 		if (changed) this.emit("rebalanced");
@@ -167,6 +207,13 @@ export class SessionStore extends EventEmitter {
 			if (!s?.id) continue;
 			// Tolerate persisted state from older builds that used "ended".
 			if ((s.state as string) === "ended") continue;
+			// Drop SessionStart-only zombies from older builds. The server no
+			// longer creates records on SessionStart, but old globalSettings
+			// may still carry phantom entries the VS Code Claude extension
+			// minted before this fix. They will never transition (their
+			// owning process never fires another event) so they'd otherwise
+			// live forever in the persisted snapshot.
+			if (s.lastEvent === "SessionStart") continue;
 			const migrated = { ...s, terminal: s.terminal ?? {} };
 			// Old persisted state from before tools-that-block-on-user were
 			// classified as `waiting`. Retro-tag those sessions correctly.

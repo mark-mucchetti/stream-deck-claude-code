@@ -17,11 +17,15 @@ const noop = { info: () => {}, warn: console.warn, error: console.error };
 const { port, close } = await startServer(store, { port: 13987, logger: noop });
 await installHooks(port, noop);
 
+// UserPromptSubmit, not SessionStart: the server intentionally ignores
+// SessionStart so phantom claude processes (e.g. the VS Code extension's
+// stream-json child that idles forever) don't get tiles. Every real event
+// carries the same session_id/cwd/_env, so picking any non-SessionStart
+// event still exercises the bridge → server → store pipeline.
 const fakeEvent = JSON.stringify({
   session_id: "e2e-1",
   cwd: "/Users/mark/src/stream-deck-claude-code",
-  hook_event_name: "SessionStart",
-  source: "startup",
+  hook_event_name: "UserPromptSubmit",
 });
 
 await new Promise<void>((resolve, reject) => {

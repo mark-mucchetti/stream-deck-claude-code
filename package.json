@@ -7,8 +7,8 @@
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c --watch",
-    "install-hooks": "node ./scripts/install-hooks.mjs",
-    "uninstall-hooks": "node ./scripts/install-hooks.mjs --uninstall",
+    "install-hooks": "tsx ./scripts/install-hooks.mjs",
+    "uninstall-hooks": "tsx ./scripts/install-hooks.mjs --uninstall",
     "test": "tsx scripts/smoke.mts && tsx scripts/install-smoke.mts && tsx scripts/bridge-e2e.mts && tsx scripts/salient-smoke.mts",
     "package": "streamdeck pack com.virtuis.claudecode.sdPlugin"
   },

@@ -27,6 +27,8 @@ Claude Code  ──►  ~/.claude/hooks/stream-deck-bridge.sh    (captures $(tty
 ```
 
 - **Hooks are command-type**, not http-type, so the bridge script can capture process-local env (`TERM_PROGRAM`, `ITERM_SESSION_ID`, `$(tty)`, `VSCODE_PID`) and forward it inside the payload.
+- **The bridge forwards metadata only** (`session_id`, `cwd`, `transcript_path`, event/tool/notification names, stop reason) — never `prompt`, `tool_input` or `tool_response`. Don't widen `FIELDS` in the bridge without a reason; anything listening on the port sees it.
+- **The HTTP server is authenticated.** The bridge sends `X-StreamDeck-Token` from `~/.claude/hooks/stream-deck-bridge.token` (0600, created on first run, never rotated, kept on uninstall). The server also requires an exact loopback `Host`, no `Origin` header, and `Content-Type: application/json`. This blocks web pages from forging events (CSRF) and DNS-rebinding reads of `/sessions`. `/health` is the only unauthenticated route.
 - **State** lives only in memory + Stream Deck `globalSettings` (debounced 500ms). No SQLite, no Redis, no Claude Code daemon to query.
 - **Hydration** on plugin start pulls sessions from `globalSettings`. **No age filter** — a session waiting on a human for hours is exactly what the tile is supposed to keep surfacing.
 - **No runtime timeouts.** State changes ONLY on real hook events. The user rejected auto-idle ("it's in the state it's in until it changes"); don't reintroduce.
@@ -38,10 +40,10 @@ Claude Code  ──►  ~/.claude/hooks/stream-deck-bridge.sh    (captures $(tty
 - `src/state.ts` — `SessionStore` (EventEmitter). `upsert / apply / remove / serialize / hydrate`.
 - `src/render.ts` — SVG → data-URI. Renders the project label *inside* the SVG (Stream Deck's own title rendering is too small to be useful).
 - `src/focus.ts` — macOS-only AppleScript dispatch. iTerm by `unique id` from `ITERM_SESSION_ID`, Terminal.app by `tty`, VS Code/Cursor by window title containing `basename(cwd)`.
-- `src/install.ts` — installs / removes `~/.claude/hooks/stream-deck-bridge.{sh,py}` and merges/unmerges hook entries into `~/.claude/settings.json`. Marker key: `_source: "stream-deck-claude-code"`. Preserves unrelated entries.
+- `src/install.ts` — installs / removes `~/.claude/hooks/stream-deck-bridge.{sh,py}` (+ creates the `.token`) and merges/unmerges hook entries into `~/.claude/settings.json`. Marker key: `_source: "stream-deck-claude-code"`. Preserves unrelated entries.
 - `src/actions/session-action.ts` — the single SingletonAction. Handles `onWillAppear`, `onKeyDown`, `onSendToPlugin` (PI messages). Sorts physical tiles by `(device, row, column)` and pairs them with `store.list()[i]` — sessions pack into the leftmost/topmost free tiles in arrival order.
 - `com.virtuis.claudecode.sdPlugin/manifest.json` — plugin manifest.
-- `com.virtuis.claudecode.sdPlugin/ui/session.html` — Property Inspector. Uses `sdpi-components` from CDN. Talks to plugin via `sendToPlugin({event: "installHooks" | "uninstallHooks" | "getHookStatus"})`.
+- `com.virtuis.claudecode.sdPlugin/ui/session.html` — Property Inspector. Uses `sdpi-components` v3.0.2, vendored in `ui/vendor/` (no remote scripts). Talks to plugin via `sendToPlugin({event: "installHooks" | "uninstallHooks" | "getHookStatus"})`.
 - `scripts/{smoke,install-smoke,bridge-e2e,salient-smoke}.mts` — `npm test` runs all four.
 - `src/strings.ts` — every user-facing string rendered into a tile, in one object.
 - `src/transcript.ts` — read the tail of a session's transcript JSONL for `aiTitle`, last prompt, and `User rejected tool use` markers.
@@ -107,7 +109,7 @@ Reload + read logs directly when debugging — don't ask the human to paste outp
 
 ```sh
 ls -t com.virtuis.claudecode.sdPlugin/logs/*.log | head -1 | xargs tail -40
-curl -s http://127.0.0.1:13427/sessions | python3 -m json.tool
+curl -s http://127.0.0.1:13427/sessions -H "X-StreamDeck-Token: $(cat ~/.claude/hooks/stream-deck-bridge.token)" | python3 -m json.tool
 ```
 
 ### Standalone CLI install/uninstall of hooks
@@ -118,6 +120,8 @@ If Stream Deck isn't running (or for headless boxes), the install logic is also 
 npm run install-hooks      # same effect as PI's Install button
 npm run uninstall-hooks    # remove every hook entry we own
 ```
+
+The CLI is a thin wrapper over `src/install.ts` (run via `tsx`), so there is one bridge implementation. Settings writes are atomic, skipped when nothing changed, and refused when `settings.json` doesn't parse.
 
 ### Packaging for Marketplace distribution
 

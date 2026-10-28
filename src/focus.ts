@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { basename } from "node:path";
+import { promises as fs } from "node:fs";
+import { basename, isAbsolute, sep } from "node:path";
 import type { Session } from "./state.js";
 
 type Result = { ok: boolean; out: string };
@@ -16,12 +17,36 @@ function osascript(script: string): Promise<Result> {
 	});
 }
 
-function openInFinder(path: string): Promise<void> {
-	return new Promise((resolve) => {
-		const p = spawn("open", [path], { stdio: "ignore" });
-		p.on("close", () => resolve());
-		p.on("error", () => resolve());
-	});
+// Directories macOS treats as a single item (apps, plug-ins, …).
+const BUNDLE_EXT = /\.(app|appex|bundle|framework|plugin|kext|prefpane|xpc|saver|qlgenerator|mdimporter|workflow|action|osax|systemextension|component|service)$/i;
+
+/** The folder the Finder fallback may show for `path`, or undefined. It must
+ *  be absolute and an existing directory once symlinks, `.`, `..` and `//`
+ *  are resolved, with no bundle anywhere in the resolved path — so a forged
+ *  cwd can't point at an app, directly or through a symlink. */
+export async function finderTarget(path: string): Promise<string | undefined> {
+	if (!isAbsolute(path)) return undefined;
+	try {
+		const real = await fs.realpath(path);
+		if (!(await fs.stat(real)).isDirectory()) return undefined;
+		return real.split(sep).some((part) => BUNDLE_EXT.test(part)) ? undefined : real;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Show the project folder in a Finder window. Uses Finder's "new window
+ *  to <folder>" rather than `open`, which never launches anything even for
+ *  a package Finder treats as a document. */
+async function openInFinder(path: string): Promise<void> {
+	const target = await finderTarget(path);
+	if (!target) return;
+	await osascript(`
+		tell application "Finder"
+			make new Finder window to (POSIX file "${esc(target)}" as alias)
+			activate
+		end tell
+	`);
 }
 
 function esc(s: string): string {

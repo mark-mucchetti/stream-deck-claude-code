@@ -1,5 +1,8 @@
+import { timingSafeEqual } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
+import { homedir } from "node:os";
+import { isAbsolute, join, normalize, sep } from "node:path";
 import type { SessionState, SessionStore, TerminalHint } from "./state.js";
 import { readTranscriptMeta } from "./transcript.js";
 
@@ -24,7 +27,8 @@ function readBody(req: IncomingMessage): Promise<string> {
 		req.setEncoding("utf8");
 		req.on("data", (c) => {
 			buf += c;
-			if (buf.length > 1024 * 1024) {
+			// The bridge sends a few hundred bytes of metadata; anything big is not ours.
+			if (buf.length > 64 * 1024) {
 				reject(new Error("payload too large"));
 				req.destroy();
 			}
@@ -34,20 +38,52 @@ function readBody(req: IncomingMessage): Promise<string> {
 	});
 }
 
+// ── Request + input validation ────────────────────────────────────────────
+// The server only ever talks to our own bridge (python urllib on this Mac).
+// Browsers are the threat: a web page can POST "simple" requests to
+// localhost, and DNS rebinding lets it read responses. So: require the
+// shared token header (a page can't send custom headers cross-origin without
+// a CORS preflight we never answer), require an exact loopback Host, refuse
+// anything carrying an Origin header, and require a JSON content type.
+
+const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+const PROJECTS_DIR = join(homedir(), ".claude", "projects");
+
+function str(v: unknown, max: number): string | undefined {
+	return typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined;
+}
+
+/** Only transcripts Claude Code itself writes: absolute, normalized, under
+ *  ~/.claude/projects, `.jsonl`. Anything else could point the transcript
+ *  reader at an arbitrary file. */
+export function safeTranscriptPath(p: unknown): string | undefined {
+	const s = str(p, 4096);
+	if (!s || !isAbsolute(s) || normalize(s) !== s || !s.endsWith(".jsonl")) return undefined;
+	return s.startsWith(PROJECTS_DIR + sep) ? s : undefined;
+}
+
+function tokenMatches(header: string | string[] | undefined, token: string): boolean {
+	if (typeof header !== "string") return false;
+	const a = Buffer.from(header);
+	const b = Buffer.from(token);
+	return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /** Throttle transcript reads per-session: at most one read every 2s. */
 const lastTranscriptRead = new Map<string, number>();
 const TRANSCRIPT_THROTTLE_MS = 2000;
 
-function pickHint(env: Record<string, string | undefined> | undefined): TerminalHint {
-	if (!env) return {};
+function pickHint(env: Record<string, unknown> | undefined): TerminalHint {
+	if (!env || typeof env !== "object") return {};
 	const out: TerminalHint = {};
-	if (env.TERM_PROGRAM) out.termProgram = env.TERM_PROGRAM;
-	if (env.TERM_SESSION_ID) out.termSessionId = env.TERM_SESSION_ID;
-	if (env.ITERM_SESSION_ID) out.iTermSessionId = env.ITERM_SESSION_ID;
-	if (env.VSCODE_PID) out.vscodePid = env.VSCODE_PID;
-	if (env.TTY) out.tty = env.TTY;
-	if (env.PPID) out.ppid = env.PPID;
-	if (env.WINDOWID) out.windowId = env.WINDOWID;
+	const v = (k: string) => str(env[k], 256);
+	if (v("TERM_PROGRAM")) out.termProgram = v("TERM_PROGRAM");
+	if (v("TERM_SESSION_ID")) out.termSessionId = v("TERM_SESSION_ID");
+	if (v("ITERM_SESSION_ID")) out.iTermSessionId = v("ITERM_SESSION_ID");
+	if (v("VSCODE_PID")) out.vscodePid = v("VSCODE_PID");
+	if (v("TTY")?.startsWith("/dev/")) out.tty = v("TTY");
+	if (v("PPID")) out.ppid = v("PPID");
+	if (v("WINDOWID")) out.windowId = v("WINDOWID");
 	return out;
 }
 
@@ -121,15 +157,30 @@ export type Logger = {
 
 export async function startServer(
 	store: SessionStore,
-	opts: { port?: number; logger?: Logger } = {},
+	opts: { port?: number; logger?: Logger; token: string },
 ): Promise<{ port: number; close: () => Promise<void> }> {
 	const logger = opts.logger ?? console;
 	const desired = opts.port ?? DEFAULT_PORT;
+	const token = opts.token;
+	if (!token) throw new Error("startServer requires a token");
+	let boundPort = 0;
 
 	const server = http.createServer(async (req, res) => {
 		const url = req.url ?? "";
+		// DNS rebinding: a rebound page sends its own hostname as Host.
+		const host = req.headers.host;
+		if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) {
+			return json(res, 403, { error: "forbidden" });
+		}
+		// Browsers always send Origin on cross-origin requests; our bridge never does.
+		if (req.headers.origin !== undefined) {
+			return json(res, 403, { error: "forbidden" });
+		}
 		if (req.method === "GET" && (url === "/" || url === "/health")) {
-			return json(res, 200, { ok: true, sessions: store.list().length });
+			return json(res, 200, { ok: true });
+		}
+		if (!tokenMatches(req.headers["x-streamdeck-token"], token)) {
+			return json(res, 401, { error: "unauthorized" });
 		}
 		if (req.method === "GET" && url === "/sessions") {
 			return json(res, 200, { sessions: store.list() });
@@ -137,9 +188,13 @@ export async function startServer(
 		if (req.method !== "POST" || !(url === "/event" || url === "/hook")) {
 			return json(res, 404, { error: "not found" });
 		}
+		if (!/^application\/json\b/i.test(req.headers["content-type"] ?? "")) {
+			return json(res, 415, { error: "expected application/json" });
+		}
 		try {
 			const raw = await readBody(req);
-			const payload: HookPayload = raw ? JSON.parse(raw) : {};
+			const parsed: unknown = raw ? JSON.parse(raw) : {};
+			const payload = sanitizePayload(parsed);
 			// Full payload to logs so we can diagnose what Claude actually
 			// fires (or doesn't) under interrupt/esc/timeout scenarios.
 			const sid = payload.session_id ?? "?";
@@ -154,11 +209,12 @@ export async function startServer(
 			return json(res, 200, { ok: true });
 		} catch (err) {
 			logger.warn("hook parse error", err);
-			return json(res, 400, { error: String(err) });
+			return json(res, 400, { error: "bad request" });
 		}
 	});
 
 	const port = await listenWithFallback(server, desired);
+	boundPort = port;
 	logger.info(`hook server listening on 127.0.0.1:${port}`);
 	return {
 		port,
@@ -166,10 +222,35 @@ export async function startServer(
 	};
 }
 
+/** Keep only known fields, each a bounded string (no newlines, so log lines
+ *  can't be forged). Invalid values are dropped, not coerced. */
+function sanitizePayload(raw: unknown): HookPayload {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+	const r = raw as Record<string, unknown>;
+	const field = (k: string, max = 128) => {
+		const v = str(r[k], max);
+		return v && !/[\r\n]/.test(v) ? v : undefined;
+	};
+	const sid = field("session_id");
+	const cwd = field("cwd", 4096);
+	return {
+		session_id: sid && SESSION_ID_RE.test(sid) ? sid : undefined,
+		cwd: cwd && isAbsolute(cwd) ? cwd : undefined,
+		transcript_path: safeTranscriptPath(r.transcript_path),
+		hook_event_name: field("hook_event_name"),
+		tool_name: field("tool_name"),
+		notification_type: field("notification_type"),
+		source: field("source"),
+		reason: field("reason"),
+		stop_reason: field("stop_reason"),
+		_env: r._env && typeof r._env === "object" ? (r._env as Record<string, string | undefined>) : undefined,
+	};
+}
+
 function handleEvent(store: SessionStore, payload: HookPayload, logger: Logger): void {
 	const id = payload.session_id;
 	if (!id) {
-		logger.warn("hook event missing session_id", payload.hook_event_name);
+		logger.warn("hook event missing or invalid session_id", payload.hook_event_name);
 		return;
 	}
 	const cwd = payload.cwd ?? "";

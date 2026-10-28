@@ -1,7 +1,7 @@
 import streamDeck, { LogLevel } from "@elgato/streamdeck";
 import { SessionAction } from "./actions/session-action.js";
-import { installHooks, isPartiallyInstalled } from "./install.js";
-import { startServer } from "./server.js";
+import { ensureToken, installHooks, isPartiallyInstalled } from "./install.js";
+import { safeTranscriptPath, startServer } from "./server.js";
 import { SessionStore, type Session } from "./state.js";
 import { readTranscriptMeta } from "./transcript.js";
 
@@ -40,7 +40,7 @@ try {
 	streamDeck.logger.warn("could not read global settings", err);
 }
 
-const { port } = await startServer(store, { logger });
+const { port } = await startServer(store, { logger, token: await ensureToken() });
 sessionAction.bind(store, port);
 
 // Top-up: if the user has already installed our hooks at some point, make
@@ -83,8 +83,10 @@ setInterval(async () => {
 	transcriptPollInflight = true;
 	try {
 		for (const s of store.list()) {
-			if (!s.transcriptPath) continue;
-			const meta = await readTranscriptMeta(s.transcriptPath);
+			// Re-check: hydrated state predates the server-side path validation.
+			const path = safeTranscriptPath(s.transcriptPath);
+			if (!path) continue;
+			const meta = await readTranscriptMeta(path);
 			if (s.state === "waiting" && meta.lastRejectionAt && meta.lastRejectionAt > s.lastUpdate) {
 				streamDeck.logger.info(`detected user rejection in transcript for ${s.id.slice(0, 8)}`);
 				store.apply(s.id, { state: "done", lastEvent: "user_rejected" });

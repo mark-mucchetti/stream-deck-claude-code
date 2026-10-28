@@ -45,6 +45,9 @@ export type Session = {
 	overflow?: boolean;
 };
 
+/** Hard cap on tracked sessions, far above any real deck. */
+export const MAX_SESSIONS = 64;
+
 /** Tool names whose PreToolUse blocks on a human response. Kept in sync
  *  with the same constant in `server.ts`. */
 const WAITS_ON_USER_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
@@ -159,6 +162,17 @@ export class SessionStore extends EventEmitter {
 				lastUpdate: Date.now(),
 				terminal: hint,
 			};
+			// Bound the store: evict the least recently updated session first.
+			if (this.sessions.size >= MAX_SESSIONS) {
+				let stalest: Session | undefined;
+				for (const x of this.sessions.values()) {
+					if (!stalest || x.lastUpdate < stalest.lastUpdate) stalest = x;
+				}
+				if (stalest) {
+					this.sessions.delete(stalest.id);
+					this.order = this.order.filter((x) => x !== stalest.id);
+				}
+			}
 			this.sessions.set(id, s);
 			this.order.push(id);
 		} else {
@@ -231,6 +245,10 @@ export class SessionStore extends EventEmitter {
 		// Append any sessions in `sessions` but missing from `order`.
 		for (const s of data.sessions) {
 			if (valid.has(s.id) && !orderedIds.includes(s.id)) orderedIds.push(s.id);
+		}
+		// Keep the newest MAX_SESSIONS (arrival order) from an older, uncapped snapshot.
+		for (const dropped of orderedIds.splice(0, Math.max(0, orderedIds.length - MAX_SESSIONS))) {
+			valid.delete(dropped);
 		}
 		this.sessions = valid;
 		this.order = orderedIds;

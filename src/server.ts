@@ -15,6 +15,7 @@ type HookPayload = {
 	source?: string;
 	reason?: string;
 	stop_reason?: string;
+	permission_mode?: string;
 	_env?: Record<string, string | undefined>;
 };
 
@@ -148,7 +149,8 @@ export async function startServer(
 				`hook ${payload.hook_event_name ?? "?"} sid=${sidShort}` +
 				(payload.tool_name ? ` tool=${payload.tool_name}` : "") +
 				(payload.notification_type ? ` notif=${payload.notification_type}` : "") +
-				(payload.stop_reason ? ` stop=${payload.stop_reason}` : ""),
+				(payload.stop_reason ? ` stop=${payload.stop_reason}` : "") +
+				(payload.permission_mode ? ` mode=${payload.permission_mode}` : ""),
 			);
 			handleEvent(store, payload, logger);
 			return json(res, 200, { ok: true });
@@ -200,6 +202,12 @@ function handleEvent(store: SessionStore, payload: HookPayload, logger: Logger):
 	if (state) patch.state = state;
 	if (tool) patch.lastTool = tool;
 	if (payload.transcript_path) patch.transcriptPath = payload.transcript_path;
+	// Auto-mode denial flag: raised by PermissionDenied, survives every other
+	// event, and clears only when the user types into the session.
+	if (payload.hook_event_name === "PermissionDenied") patch.denied = true;
+	if (payload.hook_event_name === "UserPromptSubmit") patch.denied = false;
+	if (hint.ppid) patch.pidSeenAt = Date.now();
+	if (payload.permission_mode) patch.permissionMode = payload.permission_mode;
 	store.apply(id, patch);
 
 	// Refresh the session's aiTitle from the transcript tail. Throttled and

@@ -70,6 +70,8 @@ Claude Code  ──►  ~/.claude/hooks/stream-deck-bridge.sh    (captures $(tty
 
 **Every event category that blocks Claude on a human response must surface as `waiting` (red, fast pulse).** That includes the four `PreToolUse` blocking-tool cases, `PermissionRequest`, `Elicitation`, and the two `Notification` subtypes. If a future Claude Code version adds more, register them in `install.ts:EVENTS` and add them to `stateFor()` in `server.ts`.
 
+**Auto-mode denial flag.** `PermissionDenied` (the auto-mode classifier blocked a tool) also sets `session.denied = true`. It is independent of state: the upper tile turns dark magenta (`DENIED_BG` in `render.ts`) while the bottom band keeps showing the live state color. Only `UserPromptSubmit` clears it — no timeout, no other event.
+
 `SessionEnd` removes the session immediately (no "ended" intermediate state). If the user runs `claude --resume`, `SessionStart` re-adds it with the same `session_id`.
 
 ## Tile assignment

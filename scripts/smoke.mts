@@ -82,5 +82,54 @@ await post({ session_id: "s2", cwd: "/tmp/another-project", hook_event_name: "Se
 const afterEnd = store.list();
 assert(afterEnd.length === 1 && afterEnd[0].id === "s1", `SessionEnd should remove s2, got [${afterEnd.map((x) => x.id).join(",")}]`);
 
+// Auto-mode denial: flag sticks through later events, clears on next prompt.
+const cwd1 = "/Users/mark/src/stream-deck-claude-code";
+await post({ session_id: "s1", cwd: cwd1, hook_event_name: "PermissionDenied", tool_name: "Bash" });
+assert(store.get("s1")?.denied === true, "PermissionDenied should set denied");
+await post({ session_id: "s1", cwd: cwd1, hook_event_name: "PreToolUse", tool_name: "Read" });
+await post({ session_id: "s1", cwd: cwd1, hook_event_name: "Stop" });
+assert(store.get("s1")?.denied === true, "denied should survive later events");
+assert(store.get("s1")?.state === "done", "denied should not change state");
+{
+	const { renderSession } = await import("../src/render.js");
+	const svg = Buffer.from(renderSession(store.get("s1")!).image.split(",")[1], "base64").toString("utf8");
+	assert(svg.includes('fill="#2a0d2a"'), "denied tile should paint magenta upper area");
+	assert(svg.includes('fill="#2fa056"'), "denied tile band should keep its state color");
+}
+await post({ session_id: "s1", cwd: cwd1, hook_event_name: "UserPromptSubmit" });
+assert(store.get("s1")?.denied === false, "UserPromptSubmit should clear denied");
+
+// permission_mode is captured from the payload.
+await post({ session_id: "s1", cwd: cwd1, hook_event_name: "PreToolUse", tool_name: "Read", permission_mode: "auto" });
+assert(store.get("s1")?.permissionMode === "auto", "permission_mode should be captured");
+
+// Liveness: etime parsing, missing pid, reused pid, live pid, no pid.
+{
+	const { parseEtime, isDead } = await import("../src/liveness.js");
+	assert(parseEtime("05:03") === 303_000, "etime mm:ss");
+	assert(parseEtime("01:00:00") === 3_600_000, "etime hh:mm:ss");
+	assert(parseEtime("2-00:00:00") === 172_800_000, "etime dd-hh:mm:ss");
+	const t = 1_000_000_000_000;
+	const base = { id: "x", cwd: "", label: "x", state: "done" as const, lastEvent: "Stop", startedAt: t, lastUpdate: t, pidSeenAt: t };
+	const procs = new Map([["100", t - 5_000], ["200", t + 3_600_000]]);
+	assert(!isDead({ ...base, terminal: { ppid: "100" } }, procs), "live pid started before last event is alive");
+	assert(isDead({ ...base, terminal: { ppid: "200" } }, procs), "pid that started after last event is reused -> dead");
+	assert(isDead({ ...base, terminal: { ppid: "300" } }, procs), "missing pid is dead");
+	assert(!isDead({ ...base, terminal: {} }, procs), "session with no pid is never judged dead");
+}
+
+// Capacity priority: denied and error outrank working/thinking/done.
+{
+	const st = new SessionStore();
+	for (const [id, state] of [["a", "working"], ["b", "done"], ["c", "error"], ["d", "thinking"]] as const) {
+		st.upsert(id, `/x/${id}`);
+		st.apply(id, { state, lastEvent: "PreToolUse" });
+	}
+	st.apply("b", { denied: true });
+	st.reconcileCapacity(2);
+	const vis = st.visible().map((s) => s.id).sort().join(",");
+	assert(vis === "b,c", `denied + error should keep the 2 tiles, got ${vis}`);
+}
+
 await close();
 console.log("OK");

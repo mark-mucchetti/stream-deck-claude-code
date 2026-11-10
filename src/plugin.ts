@@ -1,6 +1,7 @@
 import streamDeck, { LogLevel } from "@elgato/streamdeck";
 import { SessionAction } from "./actions/session-action.js";
 import { installHooks, isPartiallyInstalled } from "./install.js";
+import { isDead, processStartTimes } from "./liveness.js";
 import { startServer } from "./server.js";
 import { SessionStore, type Session } from "./state.js";
 import { readTranscriptMeta } from "./transcript.js";
@@ -99,5 +100,26 @@ setInterval(async () => {
 		transcriptPollInflight = false;
 	}
 }, TRANSCRIPT_POLL_MS);
+
+// Liveness sweep: drop sessions whose Claude process is gone. SessionEnd
+// never fires when Claude crashes, is killed, or dies across a sleep, so
+// without this those sessions would sit in the store (and globalSettings)
+// forever. Not an age filter — a live process waiting for hours stays.
+const LIVENESS_SWEEP_MS = 30_000;
+const sweepDead = async () => {
+	try {
+		const procs = await processStartTimes();
+		for (const s of store.list()) {
+			if (isDead(s, procs)) {
+				streamDeck.logger.info(`dropping dead session ${s.id.slice(0, 8)} (pid ${s.terminal.ppid} gone)`);
+				store.remove(s.id);
+			}
+		}
+	} catch (err) {
+		streamDeck.logger.warn("liveness sweep failed", err);
+	}
+};
+void sweepDead();
+setInterval(() => void sweepDead(), LIVENESS_SWEEP_MS);
 
 streamDeck.logger.info(`Claude Code session bridge ready on port ${port}`);

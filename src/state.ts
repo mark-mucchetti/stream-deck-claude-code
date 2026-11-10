@@ -43,6 +43,17 @@ export type Session = {
 	 *  because there are more sessions than tiles. Set/cleared by
 	 *  reconcileCapacity, persisted across restarts. */
 	overflow?: boolean;
+	/** Set when the auto-mode classifier denied a tool call (PermissionDenied).
+	 *  Sticky across later state changes; cleared only when the user submits
+	 *  a prompt in that session. The renderer paints the upper tile red. */
+	denied?: boolean;
+	/** When the plugin last received an event carrying `terminal.ppid`. The
+	 *  liveness sweep uses it to tell a live Claude process from a reused PID. */
+	pidSeenAt?: number;
+	/** `permission_mode` from the latest hook payload (`default`, `plan`,
+	 *  `acceptEdits`, `auto`, `bypassPermissions`, ...). Only updates when a
+	 *  hook fires; switching modes alone fires nothing. */
+	permissionMode?: string;
 };
 
 /** Tool names whose PreToolUse blocks on a human response. Kept in sync
@@ -50,14 +61,15 @@ export type Session = {
 const WAITS_ON_USER_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 
 /** Priority for occupying a tile when slots are scarce. Higher = keeps the
- *  tile. `waiting` is most urgent (blocked on the human); `idle`/`done` are
- *  the first to get pushed off. */
-function priorityScore(state: SessionState): number {
-	switch (state) {
-		case "waiting": return 5;
+ *  tile. `waiting` is most urgent (blocked on the human); an auto-mode denial
+ *  or an `error` comes next (something went wrong the human should see);
+ *  `idle`/`done` are the first to get pushed off. */
+function priorityScore(s: Session): number {
+	if (s.state === "waiting") return 6;
+	if (s.denied || s.state === "error") return 5;
+	switch (s.state) {
 		case "working": return 4;
 		case "thinking": return 3;
-		case "error": return 2;
 		case "done": return 1;
 		case "idle": return 0;
 		default: return 0;
@@ -66,14 +78,14 @@ function priorityScore(state: SessionState): number {
 
 /** Negative if `a` should be demoted before `b`. */
 function compareForDemotion(a: Session, b: Session): number {
-	const da = priorityScore(a.state) - priorityScore(b.state);
+	const da = priorityScore(a) - priorityScore(b);
 	if (da !== 0) return da;
 	return a.lastUpdate - b.lastUpdate;
 }
 
 /** Negative if `a` should be promoted before `b`. */
 function compareForPromotion(a: Session, b: Session): number {
-	const db = priorityScore(b.state) - priorityScore(a.state);
+	const db = priorityScore(b) - priorityScore(a);
 	if (db !== 0) return db;
 	return b.lastUpdate - a.lastUpdate;
 }
@@ -112,7 +124,7 @@ export class SessionStore extends EventEmitter {
 
 	/** Demote lowest-priority visible sessions until `visible <= capacity`, then
 	 *  promote highest-priority overflow sessions until `visible == capacity`.
-	 *  Priority by state: waiting > working > thinking > error > done > idle.
+	 *  Priority: waiting > denied/error > working > thinking > done > idle.
 	 *  Within a priority band, oldest `lastUpdate` is demoted first; newest
 	 *  `lastUpdate` is promoted first. This ensures an active session always
 	 *  pushes an idle/done one off the deck when tiles are scarce.

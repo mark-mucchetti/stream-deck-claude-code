@@ -17,6 +17,10 @@ const THEMES: Record<SessionState, Theme> = {
 	error:    { bg: "#2a0d0d", band: "#cc3030", captionFg: "#ffffff", captionText: STRINGS.state.error    },
 };
 
+/** Upper-tile fill when the auto-mode classifier denied a tool call. Same
+ *  darkness as the per-state backgrounds above, in magenta. */
+const DENIED_BG = "#2a0d2a";
+
 const EMPTY: Theme = {
 	bg: "#0a0c10", band: "#1a1d24", captionFg: "#6a7184", captionText: STRINGS.empty.noSession,
 };
@@ -364,8 +368,11 @@ export function renderSession(session: Session, phase = 0, now = Date.now()): { 
 	// Marquee is reserved for `working` with a long tool name. Other overflow
 	// (e.g. `ready (12m)`) gets squeezed instead so static text doesn't scroll.
 	const allowMarquee = session.state === "working";
+	// Auto-mode denial: upper tile goes dark magenta; the band keeps its own
+	// state color so the live state is still readable underneath.
+	const bg = session.denied ? DENIED_BG : t.bg;
 	const inner = `
-		<rect width="144" height="144" rx="12" fill="${t.bg}"/>
+		<rect width="144" height="144" rx="12" fill="${bg}"/>
 		${paintName(session.label)}
 		${paintSalient(subtitle)}
 		${paintBand(caption, hint, bandColor, captionFg, phase, allowMarquee)}

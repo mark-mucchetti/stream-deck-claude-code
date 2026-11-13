@@ -45,6 +45,19 @@ export const hooksDir = join(homedir(), ".claude", "hooks");
 export const bridgeShPath = join(hooksDir, "stream-deck-bridge.sh");
 export const bridgePyPath = join(hooksDir, "stream-deck-bridge.py");
 
+/** A hook handler is ours if it carries the marker OR runs our bridge script.
+ *  Claude Code rewrites settings.json and drops unknown keys like `_source`,
+ *  so the command path is the identifier that survives. */
+function isOurs(h: HookHandler | undefined): boolean {
+	if (!h) return false;
+	if (h._source === MARKER) return true;
+	return typeof h.command === "string" && /(^|\/)stream-deck-bridge\.sh['"]?$/.test(h.command.trim());
+}
+
+function entryIsOurs(e: HookEntry | undefined): boolean {
+	return Array.isArray(e?.hooks) && e.hooks.some(isOurs);
+}
+
 /** True if any of the user's hook entries carry our marker. Used by the
  *  startup top-up so we only ADD missing events when the user has already
  *  opted in by clicking Install at some point. */
@@ -54,7 +67,7 @@ export async function isPartiallyInstalled(): Promise<boolean> {
 		const settings = JSON.parse(raw) as Settings;
 		if (!settings.hooks) return false;
 		for (const list of Object.values(settings.hooks)) {
-			if (list.some((entry) => Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?._source === MARKER))) {
+			if (list.some(entryIsOurs)) {
 				return true;
 			}
 		}
@@ -71,9 +84,7 @@ export async function isInstalled(): Promise<boolean> {
 		if (!settings.hooks) return false;
 		for (const ev of EVENTS) {
 			const list = settings.hooks[ev] ?? [];
-			const ok = list.some(
-				(e) => Array.isArray(e?.hooks) && e.hooks.some((h) => h?._source === MARKER),
-			);
+			const ok = list.some(entryIsOurs);
 			if (!ok) return false;
 		}
 		return true;
@@ -114,9 +125,7 @@ export async function installHooks(port: number, logger: Logger): Promise<void> 
 	settings.hooks ??= {};
 	for (const ev of EVENTS) {
 		const list = (settings.hooks[ev] ??= []);
-		const already = list.some(
-			(e) => Array.isArray(e?.hooks) && e.hooks.some((h) => h?._source === MARKER),
-		);
+		const already = list.some(entryIsOurs);
 		if (already) continue;
 		list.push({
 			hooks: [{ type: "command", command: bridgeShPath, timeout: 5, _source: MARKER }],
@@ -138,7 +147,7 @@ export async function uninstallHooks(logger: Logger): Promise<void> {
 			settings.hooks[ev] = settings.hooks[ev]
 				.map((entry) => ({
 					...entry,
-					hooks: (entry.hooks ?? []).filter((h) => h?._source !== MARKER),
+					hooks: (entry.hooks ?? []).filter((h) => !isOurs(h)),
 				}))
 				.filter((entry) => (entry.hooks ?? []).length > 0);
 			if (settings.hooks[ev].length === 0) delete settings.hooks[ev];

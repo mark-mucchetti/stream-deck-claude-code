@@ -92,9 +92,7 @@ async function install() {
 	settings.hooks ??= {};
 	for (const ev of EVENTS) {
 		const list = (settings.hooks[ev] ??= []);
-		const present = list.some(
-			(e) => Array.isArray(e?.hooks) && e.hooks.some((h) => h?._source === MARKER),
-		);
+		const present = list.some((e) => Array.isArray(e?.hooks) && e.hooks.some(isOurs));
 		if (!present) {
 			list.push({ hooks: [{ type: "command", command: shPath, timeout: 5, _source: MARKER }] });
 		}
@@ -106,6 +104,14 @@ async function install() {
 	console.log(`hooks will POST to http://127.0.0.1:${PORT}/event`);
 }
 
+// Claude Code drops unknown keys like _source when it rewrites settings.json,
+// so also recognise our entries by the bridge script path.
+function isOurs(h) {
+	if (!h) return false;
+	if (h._source === MARKER) return true;
+	return typeof h.command === "string" && /(^|\/)stream-deck-bridge\.sh['"]?$/.test(h.command.trim());
+}
+
 async function uninstall() {
 	const settings = await readSettings();
 	if (settings.hooks) {
@@ -113,7 +119,7 @@ async function uninstall() {
 			settings.hooks[ev] = settings.hooks[ev]
 				.map((e) => ({
 					...e,
-					hooks: (e.hooks || []).filter((h) => h?._source !== MARKER),
+					hooks: (e.hooks || []).filter((h) => !isOurs(h)),
 				}))
 				.filter((e) => (e.hooks || []).length > 0);
 			if (settings.hooks[ev].length === 0) delete settings.hooks[ev];

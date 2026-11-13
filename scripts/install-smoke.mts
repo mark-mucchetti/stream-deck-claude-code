@@ -22,7 +22,7 @@ const seed = {
 await fs.writeFile(join(claudeDir, "settings.json"), JSON.stringify(seed, null, 2));
 
 // Re-import after HOME change so module-level constants pick up the new path.
-const { installHooks, uninstallHooks, isInstalled, settingsPath, bridgeShPath, bridgePyPath } = await import("../src/install.js");
+const { installHooks, uninstallHooks, isInstalled, isPartiallyInstalled, settingsPath, bridgeShPath, bridgePyPath } = await import("../src/install.js");
 const noop = { info: () => {}, warn: console.warn, error: console.error };
 
 function assert(cond: unknown, msg: string) {
@@ -61,6 +61,23 @@ for (const ev of allEvents) {
 	assert(count === 1, `duplicate hook entry for ${ev}: ${count}`);
 }
 
+// Claude Code rewrites settings.json and drops unknown keys like _source.
+// Entries must still be recognised by their bridge command path.
+const stripped = JSON.parse(await readFile(settingsPath, "utf8"));
+for (const list of Object.values(stripped.hooks) as { hooks?: { _source?: string }[] }[][]) {
+	for (const e of list) for (const h of e.hooks ?? []) delete h._source;
+}
+await fs.writeFile(settingsPath, JSON.stringify(stripped, null, 2));
+assert(await isInstalled(), "should report installed after _source is stripped");
+assert(await isPartiallyInstalled(), "should report partially installed after _source is stripped");
+await installHooks(13427, noop);
+const reinstalled = JSON.parse(await readFile(settingsPath, "utf8"));
+for (const ev of allEvents) {
+	const count = reinstalled.hooks[ev].filter((e: { hooks?: { command?: string }[] }) =>
+		e.hooks?.some((h) => h.command === bridgeShPath)).length;
+	assert(count === 1, `reinstall over stripped entries duplicated ${ev}: ${count}`);
+}
+
 await uninstallHooks(noop);
 assert(!(await isInstalled()), "should report uninstalled");
 const final = JSON.parse(await readFile(settingsPath, "utf8"));
@@ -68,7 +85,8 @@ assert(final.model === "claude-opus-4-7", "unrelated settings preserved after un
 assert(final.hooks?.PreToolUse?.some((e: { hooks?: { command?: string }[] }) =>
 	e.hooks?.some((h) => h.command === "echo pre")), "unrelated hook preserved after uninstall");
 assert(!Object.values(final.hooks ?? {}).flat().some((e) =>
-	(e as { hooks?: { _source?: string }[] }).hooks?.some((h) => h._source === "stream-deck-claude-code")),
+	(e as { hooks?: { _source?: string; command?: string }[] }).hooks?.some((h) =>
+		h._source === "stream-deck-claude-code" || h.command === bridgeShPath)),
 	"all our hooks removed");
 
 // Bridge files should be cleaned up.
